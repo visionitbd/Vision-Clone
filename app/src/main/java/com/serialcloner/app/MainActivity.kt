@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import com.serialcloner.app.cloner.ApkClonerEngine
 import com.serialcloner.app.cloner.AppRepository
 import com.serialcloner.app.cloner.InstallHelper
-import com.serialcloner.app.cloner.InstallResultReceiver
 import com.serialcloner.app.cloner.InstalledAppItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -69,7 +68,6 @@ fun SerialClonerApp() {
     var appToClone by remember { mutableStateOf<InstalledAppItem?>(null) }
     var isCloning by remember { mutableStateOf(false) }
     var cloneProgressText by remember { mutableStateOf("") }
-    var lastErrorMessage by remember { mutableStateOf<String?>(null) }
 
     fun refreshApps() {
         scope.launch {
@@ -81,19 +79,7 @@ fun SerialClonerApp() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        InstallResultReceiver.onInstallResult = { success, message ->
-            scope.launch(Dispatchers.Main) {
-                if (success) {
-                    lastErrorMessage = null
-                    refreshApps()
-                } else if (message != "Installation cancelled") {
-                    lastErrorMessage = message
-                }
-            }
-        }
-        refreshApps()
-    }
+    LaunchedEffect(Unit) { refreshApps() }
 
     val filteredOriginals = remember(originalApps, searchQuery) {
         if (searchQuery.isBlank()) originalApps
@@ -118,7 +104,7 @@ fun SerialClonerApp() {
                     Column {
                         Text("Vision Clone", fontWeight = FontWeight.Bold)
                         Text(
-                            "Split APK Support • Serial 1, 2, 3...",
+                            "Fast Serial Cloner • 1, 2, 3...",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -148,31 +134,6 @@ fun SerialClonerApp() {
                     onClick = { selectedTab = 1 },
                     text = { Text("My Clones (${clonedApps.size})") }
                 )
-            }
-
-            if (lastErrorMessage != null) {
-                Surface(
-                    color = Color(0xFFFEE2E2),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "Install error: $lastErrorMessage",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF991B1B),
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { lastErrorMessage = null }) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color(0xFF991B1B))
-                        }
-                    }
-                }
             }
 
             OutlinedTextField(
@@ -241,20 +202,6 @@ fun SerialClonerApp() {
             title = { Text("Clone ${target.label}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (target.isSplitApk) {
-                        Surface(
-                            color = Color(0xFFDCFCE7),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(
-                                "Split APK detected (${target.splitApkPaths.size + 1} files) — all splits will be cloned & installed together.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF166534),
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-                    }
-
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -323,10 +270,9 @@ fun SerialClonerApp() {
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
                                 runCatching {
-                                    val cloned = ApkClonerEngine.cloneApk(
+                                    ApkClonerEngine.cloneApk(
                                         context = context,
                                         sourceApkPath = target.sourceApkPath,
-                                        splitApkPaths = target.splitApkPaths,
                                         originalPackage = target.packageName,
                                         originalLabel = target.label,
                                         serialNumber = serialNum,
@@ -337,29 +283,23 @@ fun SerialClonerApp() {
                                             }
                                         }
                                     )
-                                    scope.launch(Dispatchers.Main) {
-                                        cloneProgressText = "Opening installer..."
-                                    }
-                                    // Stream APK(s) into PackageInstaller on background thread so UI never freezes
-                                    InstallHelper.installApks(context, cloned.apkFiles)
-                                    cloned
                                 }
                             }
                             isCloning = false
-                            result.onSuccess {
+                            result.onSuccess { cloned ->
                                 appToClone = null
+                                InstallHelper.installApk(context, cloned.signedApk)
                             }.onFailure { err ->
-                                lastErrorMessage = err.message ?: "Clone/install failed"
                                 Toast.makeText(
                                     context,
-                                    "Failed: ${err.message}",
+                                    "Clone failed: ${err.message}",
                                     Toast.LENGTH_LONG
                                 ).show()
                             }
                         }
                     }
                 ) {
-                    Text(if (isCloning) "Working..." else "Clone & Install")
+                    Text(if (isCloning) "Cloning..." else "Clone & Install")
                 }
             },
             dismissButton = {
