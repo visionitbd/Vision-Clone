@@ -323,7 +323,7 @@ fun SerialClonerApp() {
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
                                 runCatching {
-                                    ApkClonerEngine.cloneApk(
+                                    val cloned = ApkClonerEngine.cloneApk(
                                         context = context,
                                         sourceApkPath = target.sourceApkPath,
                                         splitApkPaths = target.splitApkPaths,
@@ -337,27 +337,29 @@ fun SerialClonerApp() {
                                             }
                                         }
                                     )
+                                    scope.launch(Dispatchers.Main) {
+                                        cloneProgressText = "Opening installer..."
+                                    }
+                                    // Stream APK(s) into PackageInstaller on background thread so UI never freezes
+                                    InstallHelper.installApks(context, cloned.apkFiles)
+                                    cloned
                                 }
                             }
                             isCloning = false
-                            result.onSuccess { cloned ->
+                            result.onSuccess {
                                 appToClone = null
-                                runCatching {
-                                    InstallHelper.installApks(context, cloned.apkFiles)
-                                }.onFailure { err ->
-                                    lastErrorMessage = err.message ?: "Failed to start installer"
-                                }
                             }.onFailure { err ->
+                                lastErrorMessage = err.message ?: "Clone/install failed"
                                 Toast.makeText(
                                     context,
-                                    "Clone failed: ${err.message}",
+                                    "Failed: ${err.message}",
                                     Toast.LENGTH_LONG
                                 ).show()
                             }
                         }
                     }
                 ) {
-                    Text(if (isCloning) "Cloning..." else "Clone & Install")
+                    Text(if (isCloning) "Working..." else "Clone & Install")
                 }
             },
             dismissButton = {

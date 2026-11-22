@@ -8,16 +8,18 @@ import java.io.FileOutputStream
 import java.io.FilterOutputStream
 import java.io.OutputStream
 import java.util.zip.CRC32
+import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
- * Clones both single-APK apps and Split-APK (App Bundle) apps by patching,
- * ZIP-aligning (4-byte / 4KB), and signing base.apk plus every split APK
- * with the same local certificate for installation via PackageInstaller.
+ * Fast APK cloner supporting both single-APK and Split-APK apps
+ * using BEST_SPEED compression and 64 KB buffered I/O.
  */
 object ApkClonerEngine {
+
+    private const val IO_BUFFER_SIZE = 65536
 
     data class CloneResult(
         val apkFiles: List<File>,
@@ -67,7 +69,6 @@ object ApkClonerEngine {
 
         val resultApks = mutableListOf<File>()
 
-        // 1. Process base APK
         onProgress("Patching & signing base APK...")
         val signedBase = processSingleApk(
             inputApk = File(sourceApkPath),
@@ -82,7 +83,6 @@ object ApkClonerEngine {
         )
         resultApks.add(signedBase)
 
-        // 2. Process all split APKs (if App Bundle)
         splitApkPaths.forEachIndexed { idx, splitPath ->
             onProgress("Cloning split ${idx + 1}/${splitApkPaths.size}...")
             val signedSplit = processSingleApk(
@@ -99,7 +99,6 @@ object ApkClonerEngine {
             resultApks.add(signedSplit)
         }
 
-        onProgress("Starting installer...")
         return CloneResult(
             apkFiles = resultApks,
             clonedPackageName = clonedPackage,
@@ -122,8 +121,12 @@ object ApkClonerEngine {
         val signedApk = File(outputDir, outputName)
 
         ZipFile(inputApk).use { zipIn ->
-            val countingOut = CountingOutputStream(BufferedOutputStream(FileOutputStream(unsignedApk)))
+            val countingOut = CountingOutputStream(
+                BufferedOutputStream(FileOutputStream(unsignedApk), IO_BUFFER_SIZE)
+            )
             ZipOutputStream(countingOut).use { zipOut ->
+                zipOut.setLevel(Deflater.BEST_SPEED)
+
                 val entries = zipIn.entries()
                 while (entries.hasMoreElements()) {
                     val entry = entries.nextElement()
@@ -147,7 +150,7 @@ object ApkClonerEngine {
                         zipOut.closeEntry()
                     } else if (entry.method == ZipEntry.STORED || name == "resources.arsc" || name.endsWith(".so")) {
                         val data = zipIn.getInputStream(entry).use { it.readBytes() }
-                        val crc = CRC32().apply { update(data) }.value
+                        val crc = if (entry.crc >= 0) entry.crc else CRC32().apply { update(data) }.value
 
                         zipOut.flush()
                         val alignment = if (name.endsWith(".so")) 4096 else 4
@@ -169,7 +172,7 @@ object ApkClonerEngine {
                     } else {
                         val newEntry = ZipEntry(name).apply { method = ZipEntry.DEFLATED }
                         zipOut.putNextEntry(newEntry)
-                        zipIn.getInputStream(entry).use { it.copyTo(zipOut) }
+                        zipIn.getInputStream(entry).use { it.copyTo(zipOut, IO_BUFFER_SIZE) }
                         zipOut.closeEntry()
                     }
                 }
